@@ -1,0 +1,98 @@
+1.	Quality check: FASTQC
+fastqc Sample.fastq.gz  —outdir ../name_of_output_directory —threads 3
+
+2.	Quality Trimming: Trimmomatic
+java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.39.jar PE Sample_R1.fastq.gz Sample_R2.fastq.gz Sample-paired_R1.fastq.gz Sample-unpaired_R1.fastq.gz Sample-paired_R2.fastq.gz Sample-unpaired_R2.fastq.gz LEADING:10 TRAILING:10 HEADCROP:5 SLIDINGWINDOW:4:20 MINLEN:40
+
+3.	Indexing the reference genome with bowtie2
+bowtie2-build Dog_CanFam3.1_genomic.fna Dog_Canfam3.1_genome_Index
+
+4.	Alignment to the reference genome: bowtie2
+bowtie2 -x Dog_Canfam3.1_genome_index -1 Sample-paired_R1.fastq.gz -2 Sample-paired_R2.fastqc.gz -S Sample_alignment.sam -p 32
+
+5.	Converting SAM to BAM file, sorting and indexing: samtools
+samtools view -bS Sample_alignment.sam -o Sample_alignment.bam
+samtools sort Sample_alignment.bam -o Sample_alignment_sorted.bam
+samtools index Sample_alignment_sorted.bam
+
+6.	Mark duplicate reads: picards
+java -jar $EBROOTPICARD/picard.jar MarkDuplicates I=Sample_alignment_sorted.bam O=Sample_alignment_sorted_mardup.bam M=Sample_mardup.metrics
+
+7.	Creating a dict file for reference genome
+java -jar $EBROOTPICARD/picard.jar CreateSequenceDictionary \
+R= Dog_CanFam3.1_genomic.fa \
+O= Dog_CanFam3.1_genomic.dict
+
+8.	Add or replace read groups: picards
+java -jar $EBROOTPICARD/picard.jar AddOrReplaceReadGroups \
+      I=Sample_alignmen_sorted_mardup.bam \
+      O=Sample_alignment_sorted_mardup_rg.bam \
+      RGID=Sample_name_S_lane \
+      RGLB=Sample_name_lib \
+      RGPL=illumina \
+      RGPU=S_lane \
+      RGSM=Sample_name
+
+9.	Indexing the above generated file
+samtools index Sample_alignment_sorted_mardup_rg.bam
+
+10.	Base quality score recalibration: GATK4
+gatk BaseRecalibrator -R Dog_Canfam3.1_genome.fna -I Sample_alignment_sorted_markdup_rg.bam --known-sites knownsites.vcf -O Sample_recalibration_report.table
+
+gatk ApplyBQSR -R Dog_Canfam3.1_genome.fna -I Sample_alignments_sorted_mardup_rg.bam --bqsr-recal-file Sample_recalibration_report.table -O Sample_mardp_rg_bqsr.bam
+11.	Collecting the alignment quality metrics:
+java -jar picard.jar CollectAlignmentSummaryMetrics \
+      R=reference.fasta \
+      I=input.bam \
+      O=alignment_metrics.txt
+
+12.	Variant calling: Varscan2, Mutect
+a.Varscan2:
+samtools mpileup -f Dog_Canfam3.1_genome.fna Sample_mardp_rg_bqsr.bam > Sample_bqsr_samtools.pileup
+java -jar $EBROOTVARSCAN/VarScan.v2.4.4.jar somatic Sample_Genome_bqsr_samtools.pileup Sample_bqsr_samtools.pileup Sample_Output --min-var-freq 0.01 --output-vcf 1 
+bcftools concat -a -O z -o Sample_Varscan_Varinats.vcf Sample_Varscan.indel.vcf Sample_Varscan.snp.vcf
+Varscan variant filtering:
+bgzip  Sample_Varscan_Varinats.vcf
+bcftools index  Sample_Varscan_Varinats.vcf.gz
+bcftools view -i 'FILTER="PASS" && INFO/DP>=30' Sample_Varscan_Varinats.vcf.gz  -O z -o Sample_Varscan_Filtered_Varinats.vcf.gz
+
+b.Mutect2
+gatk Mutect2 \
+     -R Dog_Canfam3.1_genome.fna \
+     -I Sample_mardp_rg_bqsr.bam \
+     -I Sample_Genome_mardp_rg_bqsr.bam \
+     --normal-sample Name \
+     -O Sample_somaticMutect.vcf
+Mutect varint filtering:
+gatk FilterMutectCalls \
+    -V Sample_somaticMutect.vcf \
+    -R Dog_Canfam3.1_genome.fna \
+    -O Sample_somaticMutect_filtered.vcf
+
+13.	Extracting common variants between the 2 callers: bcftools
+bcftools concat -a Sample_VarscanFiltered.snp.vcf.gz Sample_VarscanFiltered.indel.vcf.gz -O z -o Sample_VarscanFiltered.vcf.gz
+bcftools isec -p Sample_shared_variants_folder Sample_somaticMutect_Filtered.vcf.gz Sample_cfDNA_VarscanFiltered.vcf.gz 
+
+14.	Exclude dbSNP variants
+bcftools isec -C -p Sample_unique_variants_folder Sample_CommonVariants.vcf.gz
+Filtred_Published.vcf.gz
+bcftools view Sample_unique_variants_folder/0000.vcf -O z -o Sample_variants.vcf.gz
+
+15.	Variant annotation: annovar
+perl convert2annovar.pl -format vcf4old Sample_variants.vcf > Sample_variant.avinput
+perl annotate_variation.pl Sample_variant.avinput dog_database/ -buildver dog -out AnnotatedOutput/Sample_oupt
+
+16.	Total number of variants in a vcf file
+bcftools view -H Sample_variants.vcf.gz | wc -l
+Total number of snps: bcftools view -v snps Sample_variants.vcf.gz | grep -c -v "^#"
+Total number of indels: bcftools view -v indels Sample_variants.vcf.gz | grep -c -v "^#"
+
+17.	Total number of shared variants between plasma and tumor samples
+bcftools view -H Sample_variants.vcf.gz | cut -f1-2 | sort | uniq > Sample_cfDNA_variants.txt
+bcftools view -H Sample_variants.vcf.gz | cut -f1-2 | sort | uniq > Sample_tumor_variants.txt
+grep -Fxf Sample_cfDNA_variants.txt Sample_tumor_variants.txt | wc -l
+
+18.	Annotated Variants:
+Total exonic variants: wc -l Sample.exonic_variant_function
+Non-synonymous SNVs: grep "nonsynonymous SNV" Sample.exonic_variant_function | wc -l
+Intronic variants: grep "intronic" Sample.variant_function | wc -l
