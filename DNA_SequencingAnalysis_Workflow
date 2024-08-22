@@ -2,7 +2,7 @@
 fastqc Sample.fastq.gz  —outdir ../name_of_output_directory —threads 3
 
 2.	Quality Trimming: Trimmomatic
-java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.39.jar PE Sample_R1.fastq.gz Sample_R2.fastq.gz Sample-paired_R1.fastq.gz Sample-unpaired_R1.fastq.gz Sample-paired_R2.fastq.gz Sample-unpaired_R2.fastq.gz LEADING:10 TRAILING:10 HEADCROP:5 SLIDINGWINDOW:4:20 MINLEN:40
+java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.39.jar PE Sample_R1.fastq.gz Sample_R2.fastq.gz Sample-paired_R1.fastq.gz Sample-unpaired_R1.fastq.gz Sample-paired_R2.fastq.gz Sample-unpaired_R2.fastq.gz LEADING:10 TRAILING:10 SLIDINGWINDOW:4:20 MINLEN:40
 
 3.	Indexing the reference genome with bowtie2
 bowtie2-build Dog_CanFam3.1_genomic.fna Dog_Canfam3.1_genome_Index
@@ -38,15 +38,15 @@ samtools index Sample_alignment_sorted_mardup_rg.bam
 
 10.	Base quality score recalibration: GATK4
 gatk BaseRecalibrator -R Dog_Canfam3.1_genome.fna -I Sample_alignment_sorted_markdup_rg.bam --known-sites knownsites.vcf -O Sample_recalibration_report.table
-
 gatk ApplyBQSR -R Dog_Canfam3.1_genome.fna -I Sample_alignments_sorted_mardup_rg.bam --bqsr-recal-file Sample_recalibration_report.table -O Sample_mardp_rg_bqsr.bam
+
 11.	Collecting the alignment quality metrics:
 java -jar picard.jar CollectAlignmentSummaryMetrics \
       R=reference.fasta \
       I=input.bam \
       O=alignment_metrics.txt
 
-12.	Variant calling: Varscan2, Mutect
+12.	Variant calling and filtering: Varscan2, Mutect
 a.Varscan2:
 samtools mpileup -f Dog_Canfam3.1_genome.fna Sample_mardp_rg_bqsr.bam > Sample_bqsr_samtools.pileup
 java -jar $EBROOTVARSCAN/VarScan.v2.4.4.jar somatic Sample_Genome_bqsr_samtools.pileup Sample_bqsr_samtools.pileup Sample_Output --min-var-freq 0.01 --output-vcf 1 
